@@ -12,7 +12,6 @@ from dateutil import tz
 
 # endregion Importing important imports
 
-DEBUG = True
 
 # region Inits
 
@@ -227,8 +226,6 @@ def calculate_accuracy():
     print("\n" + str(data))
     այժմ = datetime.now().astimezone(AM_TZ)
     competing = False
-    if DEBUG:
-        այժմ = ACCEPTING_SUBMISSIONS
     
     # region Checks
     
@@ -295,8 +292,6 @@ def serve_data():
     (No labels will be sent out)"""
     
     այժմ = datetime.now().astimezone(AM_TZ)
-    if DEBUG:
-        այժմ = ACCEPTING_SUBMISSIONS
     
     if այժմ < TASK_REVEAL:
         return Response(json.dumps({"message": NOT_REVEALED_MSG}), status=403)
