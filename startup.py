@@ -44,6 +44,11 @@ with open(PRIVATE_PATHS, "r") as f:
     p_paths = [p.replace("\n", "") for p in f.readlines()]
 del PRIVATE_PATHS
 
+paths = {
+    "accuracy": "/d2023/accuracy",
+    "data": "/d2023/data",
+    "main": "/d2023"
+}
 
 NOT_REVEALED_MSG = "I value your acumen and interest, but the task is not yet revealed."
 TEAM_NOT_FOUND_MSG = f"Your team was not found in the list, please contact Mher Movsisyan - phone: ({p_paths[3]})."
@@ -52,6 +57,21 @@ DIFF_LEN_MSG = """The length of the list `predictions` doesn't match the evaluat
 Also, make sure that the order of predicted labels matches the fetched dataset."""
 NOT_ALL_DATA_MSG = "This is not all the data, once the submission process begins you will be \
 given a larger dataset through this endpoint."
+NOT_KAGGLE = "The URL you provided doesn't lead to a kaggle notebook. Please modify it to do \
+so, or if you think this is a mistake, call Mher Movsisyan"
+INSTRUCTIONS_DTAPI = f'''To submit your results, make a POST request to the "{paths["accuracy"]}"
+endpoint with a JSON object containing the keys `predictions`, `team`, `auth_token`. The 
+value of `predictions` is a list of model outputs. Don\'t alter the order of the eval data. 
+You can access the evaluation data by sending a GET request to "{paths["data"]}".''' + \
+'''\n
+Sample request body:
+{
+    "predictions": [0,0,1,1,0,1,...,1,0,0,1],
+    "team": "Conquerors",
+    "auth_token": "secret_token",
+    "url: "https://www.kaggle.com/code/user/notebook"
+}
+'''
 
 
 app = Flask(__name__)
@@ -154,18 +174,18 @@ def load_scoreboard():
 # To make `accept_submission` thread-safe, I will use only write
 # to the `scoreboard` sheet and append to the `submissions` sheet
 
-def accept_submission(team, score):
+def accept_submission(team, score, url):
     """Handles succesfull submissions in a thread-safe manner"""
-
     
     այժմ = datetime.now().astimezone(AM_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    
     
     client = gspread.authorize(CREDS)
     wb = client.open(SCOREBOARD_DS_NAME)
     submissions = wb.worksheet("submissions")
     
     # Append submission to list
-    submissions.append_row([team, score, այժմ])
+    submissions.append_row([team, score, այժմ, url])
     
     
     ### Mash the submissions into a scoreboard ###
@@ -178,8 +198,10 @@ def accept_submission(team, score):
     _isin = score_df[["Team", "Score"]].stack().isin(team_max.stack().values).unstack()
     score_df = score_df[_isin.all(axis=1)].groupby("Team").first().reset_index()
     
+    
     # Sort
     score_df = score_df.sort_values("Score", ascending=False)
+    score_df["Submission Code"] = '<a target="_blank" href="' + score_df["Submission Code"] + '">View code</a>'
     # Post updated scoreboard
     scoreboard = wb.worksheet("scoreboard")
     scoreboard.update([score_df.columns.values.tolist()] + score_df.values.tolist())
@@ -194,29 +216,10 @@ def accept_submission(team, score):
 
 
 
-paths = {
-    "accuracy": "/d2023/accuracy",
-    "data": "/d2023/data",
-    "main": "/d2023"
-}
-
-
 @app.route(paths["main"], methods=["GET"])
 def instructions():
     """Instructs on API usage """
-    return jsonify({'message': f'''To submit your results, make a POST request to the "{paths["accuracy"]}"
-        endpoint with a JSON object containing the keys `predictions`, `team`, `auth_token`. The 
-        value of `predictions` is a list of model outputs. Don\'t alter the order of the eval data. 
-        You can access the evaluation data by sending a GET request to "{paths["data"]}".''' + \
-        '''\n
-        Sample request body:
-        {
-            "predictions": [0,0,1,1,0,1,...,1,0,0,1],
-            "team": "Conquerors",
-            "auth_token": "secret_token"
-        }
-        
-        '''})
+    return jsonify({'message': INSTRUCTIONS_DTAPI})
     
 
 @app.route(paths["accuracy"], methods=["POST"])
@@ -225,11 +228,12 @@ def calculate_accuracy():
     data = request.get_json()
     print("\n" + str(data))
     այժմ = datetime.now().astimezone(AM_TZ)
+    այժմ = datetime(2023, 2, 11, 17, 40, tzinfo = AM_TZ)
     competing = False
     
     # region Checks
     
-    for k in ["predictions", "team", "auth_token"]:
+    for k in ["predictions", "team", "auth_token", "url"]:
         if k not in data.keys():
             return Response(f"Please specify `{k}` in the request.", status=400)
     
@@ -241,7 +245,12 @@ def calculate_accuracy():
         return Response("Wrong authentication token.", 
                         status=401)
     
-    if len(data["predictions"]) != (101 if (այժմ > TASK_REVEAL and այժմ < ACCEPTING_SUBMISSIONS) else len(eval_df)):
+    if ("https://www.kaggle.com/" != data["url"][:23]) and ([i not in data["url"] for i in [
+            ">", "<", "}", "{", "[", "]", '"', "'"
+        ]]):
+        return Response(NOT_KAGGLE, status=401)
+    
+    if len(data["predictions"]) != (101 if այժմ < ACCEPTING_SUBMISSIONS else len(eval_df)):
         return Response(DIFF_LEN_MSG, status=422)
         
     # endregion Checks
@@ -266,7 +275,7 @@ def calculate_accuracy():
         accuracy = np.sum(eval_df.Label == data["predictions"])/len(eval_df) 
 
         accuracy = np.round(accuracy, 5) * 100
-        accept_submission(data["team"], accuracy)
+        accept_submission(data["team"], accuracy, data["url"])
     
     
     with open(LOG_PATH, "a") as f:
